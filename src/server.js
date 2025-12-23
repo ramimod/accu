@@ -44,6 +44,45 @@ async function getAllTracks() {
     .lean();
 }
 
+async function getAllArtists() {
+  const artists = await Artist.find().sort({ artistdisplay: 1 }).lean();
+  
+  // Get track count for each artist
+  const trackCounts = await Track.aggregate([
+    { $group: { _id: '$artist', count: { $sum: 1 } } }
+  ]);
+  
+  const countMap = {};
+  trackCounts.forEach(tc => {
+    if (tc._id) countMap[tc._id.toString()] = tc.count;
+  });
+  
+  return artists.map(a => ({
+    ...a,
+    trackCount: countMap[a._id.toString()] || 0
+  }));
+}
+
+async function getGenres() {
+  // Get unique genres with track counts
+  const genres = await Track.aggregate([
+    { $lookup: { from: 'artists', localField: 'artist', foreignField: '_id', as: 'artistData' } },
+    { $unwind: { path: '$artistData', preserveNullAndEmptyArrays: true } },
+    { $group: { 
+      _id: '$artistData.artistcat',
+      count: { $sum: 1 },
+      artists: { $addToSet: '$artistData._id' }
+    }},
+    { $sort: { count: -1 } }
+  ]);
+  
+  return genres.map(g => ({
+    name: g._id || 'Unknown',
+    trackCount: g.count,
+    artistCount: g.artists.filter(a => a).length
+  }));
+}
+
 const server = http.createServer(async (req, res) => {
   const url = new URL(req.url, `http://localhost:${PORT}`);
   
@@ -155,6 +194,22 @@ const server = http.createServer(async (req, res) => {
       return;
     }
     
+    // GET /artists - Get all artists with track counts
+    if (url.pathname === '/artists' && req.method === 'GET') {
+      const artists = await getAllArtists();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(artists));
+      return;
+    }
+    
+    // GET /genres - Get all genres with counts
+    if (url.pathname === '/genres' && req.method === 'GET') {
+      const genres = await getGenres();
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify(genres));
+      return;
+    }
+    
     // GET /tracks/recent - Get recent tracks
     if (url.pathname === '/tracks/recent' && req.method === 'GET') {
       const limit = parseInt(url.searchParams.get('limit')) || 10;
@@ -226,7 +281,7 @@ const server = http.createServer(async (req, res) => {
   <title>AccuRadio Parser</title>
   <style>
     * { box-sizing: border-box; margin: 0; padding: 0; }
-    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; }
+    body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif; background: #1a1a2e; color: #eee; padding: 20px; padding-bottom: 100px; }
     .container { max-width: 1200px; margin: 0 auto; }
     h1 { color: #00d9ff; margin-bottom: 20px; }
     .stats { display: flex; gap: 20px; margin-bottom: 30px; flex-wrap: wrap; }
@@ -285,20 +340,48 @@ const server = http.createServer(async (req, res) => {
     .pagination button:hover { background: #1a4a6e; }
     .pagination button:disabled { background: #333; color: #666; cursor: not-allowed; }
     .pagination span { color: #888; }
-    .now-playing { position: fixed; bottom: 0; left: 0; right: 0; background: #16213e; padding: 15px 20px; display: none; align-items: center; gap: 15px; border-top: 1px solid #333; z-index: 100; }
+    .now-playing { position: fixed; bottom: 0; left: 0; right: 0; background: linear-gradient(180deg, #1a2a4e 0%, #16213e 100%); padding: 12px 20px; display: none; align-items: center; gap: 15px; border-top: 2px solid #00d9ff; z-index: 100; box-shadow: 0 -4px 20px rgba(0,0,0,0.5); }
     .now-playing.active { display: flex; }
-    .now-playing-cover { width: 50px; height: 50px; border-radius: 4px; }
-    .now-playing-info { flex: 1; }
-    .now-playing-title { color: #eee; font-weight: bold; }
-    .now-playing-artist { color: #888; font-size: 14px; }
-    .now-playing-controls { display: flex; gap: 10px; align-items: center; }
-    .now-playing-close { background: none; border: none; color: #888; font-size: 20px; cursor: pointer; }
-    audio { width: 300px; height: 32px; }
+    .now-playing-cover { width: 56px; height: 56px; border-radius: 6px; object-fit: cover; background: #333; box-shadow: 0 2px 10px rgba(0,0,0,0.3); }
+    .now-playing-info { flex: 1; min-width: 0; }
+    .now-playing-title { color: #fff; font-weight: 600; font-size: 15px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .now-playing-artist { color: #888; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .now-playing-controls { display: flex; gap: 8px; align-items: center; }
+    .player-btn { background: none; border: none; color: #888; font-size: 20px; cursor: pointer; padding: 8px; border-radius: 50%; transition: all 0.2s; }
+    .player-btn:hover { color: #fff; background: rgba(255,255,255,0.1); }
+    .player-btn.main { background: #00d9ff; color: #1a1a2e; width: 44px; height: 44px; font-size: 18px; }
+    .player-btn.main:hover { background: #00b8d9; transform: scale(1.05); }
+    .now-playing-progress { display: flex; align-items: center; gap: 10px; flex: 1; max-width: 400px; }
+    .progress-time { color: #888; font-size: 12px; min-width: 40px; text-align: center; font-variant-numeric: tabular-nums; }
+    .progress-bar { flex: 1; height: 4px; background: #333; border-radius: 2px; cursor: pointer; position: relative; }
+    .progress-bar:hover { height: 6px; }
+    .progress-fill { height: 100%; background: #00d9ff; border-radius: 2px; width: 0%; transition: width 0.1s; }
+    .progress-bar:hover .progress-fill { background: #00eeff; }
+    .volume-control { display: flex; align-items: center; gap: 6px; }
+    .volume-slider { width: 80px; height: 4px; -webkit-appearance: none; background: #333; border-radius: 2px; cursor: pointer; }
+    .volume-slider::-webkit-slider-thumb { -webkit-appearance: none; width: 12px; height: 12px; background: #00d9ff; border-radius: 50%; cursor: pointer; }
+    .volume-slider::-moz-range-thumb { width: 12px; height: 12px; background: #00d9ff; border-radius: 50%; cursor: pointer; border: none; }
+    .now-playing-close { background: none; border: none; color: #666; font-size: 18px; cursor: pointer; padding: 8px; margin-left: 5px; }
+    .now-playing-close:hover { color: #dc3545; }
+    .nav-tabs { display: flex; gap: 0; margin-bottom: 20px; border-bottom: 2px solid #333; }
+    .nav-tab { background: none; border: none; color: #888; padding: 12px 24px; font-size: 16px; cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -2px; transition: all 0.2s; }
+    .nav-tab:hover { color: #eee; background: #16213e; }
+    .nav-tab.active { color: #00d9ff; border-bottom-color: #00d9ff; }
+    .view-panel { display: none; }
+    .view-panel.active { display: block; }
+    .card-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(200px, 1fr)); gap: 20px; margin-top: 20px; }
+    .card { background: #16213e; border-radius: 10px; padding: 20px; cursor: pointer; transition: transform 0.2s, background 0.2s; }
+    .card:hover { transform: translateY(-2px); background: #1a2a4e; }
+    .card h3 { color: #00d9ff; margin-bottom: 8px; font-size: 16px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .card p { color: #888; font-size: 14px; }
+    .card .count { color: #eee; font-size: 24px; font-weight: bold; margin-top: 10px; }
+    .back-btn { background: #16213e; border: none; color: #00d9ff; padding: 8px 16px; border-radius: 5px; cursor: pointer; margin-bottom: 15px; }
+    .back-btn:hover { background: #1a4a6e; }
   </style>
 </head>
 <body>
   <div class="container">
-    <h1>🎵 AccuRadio Parser</h1>
+    <h1>🎵 Rami's Music Collection</h1>
     
     <div class="stats">
       <div class="stat-card">
@@ -313,13 +396,9 @@ const server = http.createServer(async (req, res) => {
         <h3>Artists</h3>
         <div class="value" id="stat-artists">${stats.artists}</div>
       </div>
-      <div class="stat-card">
-        <h3>Ads</h3>
-        <div class="value" id="stat-ads">${stats.ads}</div>
-      </div>
     </div>
     
-    <div class="refresh-section">
+    <div class="refresh-section" id="admin-section" style="display: none;">
       <input type="text" id="url-input" placeholder="Enter URL to parse (or leave empty for configured URL)">
       <button class="refresh-btn" onclick="refresh()">🔄 Refresh Data</button>
       <button class="delete-btn" onclick="deleteAll()">🗑️ Delete All</button>
@@ -330,6 +409,13 @@ const server = http.createServer(async (req, res) => {
       <div id="status" class="status"></div>
     </div>
     
+    <div class="nav-tabs">
+      <button class="nav-tab active" onclick="switchView('tracks')">🎵 Tracks</button>
+      <button class="nav-tab" onclick="switchView('artists')">🎤 Artists</button>
+    </div>
+    
+    <!-- Tracks View -->
+    <div id="tracks-view" class="view-panel active">
     <div class="search-section">
       <input type="text" id="search-input" placeholder="🔍 Search tracks, artists, albums..." oninput="handleSearch()">
       <span id="results-count" style="color: #888;"></span>
@@ -356,6 +442,38 @@ const server = http.createServer(async (req, res) => {
       <span id="page-info">Page 1 of 1</span>
       <button id="next-btn" onclick="nextPage()" disabled>Next →</button>
     </div>
+    </div>
+    
+    <!-- Artists View -->
+    <div id="artists-view" class="view-panel">
+      <div id="artist-list">
+        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px;">
+          <h2 style="margin: 0;">🎤 Artists</h2>
+          <span id="artist-count" style="color: #888;"></span>
+        </div>
+        <div style="margin-bottom: 20px;">
+          <input type="text" id="artist-search" placeholder="🔍 Search artists by name or genre..." oninput="handleArtistSearch()" style="width: 100%; padding: 14px 20px; font-size: 16px; border: none; border-radius: 8px; background: #16213e; color: #eee; outline: none;">
+        </div>
+        <div class="card-grid" id="artists-grid"></div>
+      </div>
+      <div id="artist-detail" style="display: none;">
+        <button class="back-btn" onclick="showArtistList()">← Back to Artists</button>
+        <h2 id="artist-detail-name" style="color: #00d9ff; margin-bottom: 5px;"></h2>
+        <p id="artist-detail-genre" style="color: #888; margin-bottom: 20px;"></p>
+        <table class="tracks-table">
+          <thead>
+            <tr>
+              <th style="width: 50px;"></th>
+              <th style="width: 50px;"></th>
+              <th>Title</th>
+              <th>Album</th>
+              <th>Year</th>
+            </tr>
+          </thead>
+          <tbody id="artist-tracks-body"></tbody>
+        </table>
+      </div>
+    </div>
   </div>
   
   <!-- Now Playing Bar -->
@@ -366,9 +484,23 @@ const server = http.createServer(async (req, res) => {
       <div class="now-playing-artist" id="np-artist"></div>
     </div>
     <div class="now-playing-controls">
-      <audio id="audio-player" controls></audio>
+      <button class="player-btn" onclick="playPrevious()" title="Previous">⏮</button>
+      <button class="player-btn main" id="play-pause-btn" onclick="togglePlayPause()" title="Play/Pause">▶</button>
+      <button class="player-btn" onclick="playNext()" title="Next">⏭</button>
     </div>
-    <button class="now-playing-close" onclick="stopPlaying()">×</button>
+    <div class="now-playing-progress">
+      <span class="progress-time" id="current-time">0:00</span>
+      <div class="progress-bar" id="progress-bar" onclick="seekTo(event)">
+        <div class="progress-fill" id="progress-fill"></div>
+      </div>
+      <span class="progress-time" id="duration">0:00</span>
+    </div>
+    <div class="volume-control">
+      <button class="player-btn" id="volume-btn" onclick="toggleMute()" title="Volume">🔊</button>
+      <input type="range" class="volume-slider" id="volume-slider" min="0" max="100" value="100" oninput="setVolume(this.value)">
+    </div>
+    <button class="now-playing-close" onclick="stopPlaying()" title="Close">✕</button>
+    <audio id="audio-player" style="display:none;"></audio>
   </div>
   
   <!-- Track Detail Modal -->
@@ -392,10 +524,25 @@ const server = http.createServer(async (req, res) => {
     // State
     let allTracks = [];
     let filteredTracks = [];
+    let allArtists = [];
+    let filteredArtists = [];
     let currentPage = 1;
     const pageSize = 20;
     let currentPlayingId = null;
     let searchTimeout = null;
+    let currentView = 'tracks';
+    
+    // View switching
+    function switchView(view) {
+      currentView = view;
+      document.querySelectorAll('.nav-tab').forEach(tab => tab.classList.remove('active'));
+      document.querySelectorAll('.view-panel').forEach(panel => panel.classList.remove('active'));
+      
+      document.querySelector('.nav-tab[onclick*=\"' + view + '\"]').classList.add('active');
+      document.getElementById(view + '-view').classList.add('active');
+      
+      if (view === 'artists' && allArtists.length === 0) loadArtists();
+    }
     
     // Load all tracks on page load
     async function loadTracks() {
@@ -545,6 +692,7 @@ const server = http.createServer(async (req, res) => {
       currentPlayingId = null;
       nowPlaying.classList.remove('active');
       updatePlayButtons();
+      document.getElementById('play-pause-btn').textContent = '▶';
     }
     
     function updatePlayButtons() {
@@ -560,10 +708,107 @@ const server = http.createServer(async (req, res) => {
       });
     }
     
-    // Audio ended handler
-    document.getElementById('audio-player').addEventListener('ended', () => {
-      stopPlaying();
+    function togglePlayPause() {
+      const audio = document.getElementById('audio-player');
+      const btn = document.getElementById('play-pause-btn');
+      if (audio.paused) {
+        audio.play();
+        btn.textContent = '⏸';
+      } else {
+        audio.pause();
+        btn.textContent = '▶';
+      }
+    }
+    
+    function formatTime(seconds) {
+      if (isNaN(seconds)) return '0:00';
+      const mins = Math.floor(seconds / 60);
+      const secs = Math.floor(seconds % 60);
+      return mins + ':' + (secs < 10 ? '0' : '') + secs;
+    }
+    
+    function seekTo(event) {
+      const audio = document.getElementById('audio-player');
+      const bar = document.getElementById('progress-bar');
+      const rect = bar.getBoundingClientRect();
+      const percent = (event.clientX - rect.left) / rect.width;
+      audio.currentTime = percent * audio.duration;
+    }
+    
+    function setVolume(value) {
+      const audio = document.getElementById('audio-player');
+      audio.volume = value / 100;
+      updateVolumeIcon(value);
+    }
+    
+    function toggleMute() {
+      const audio = document.getElementById('audio-player');
+      const slider = document.getElementById('volume-slider');
+      if (audio.volume > 0) {
+        audio.dataset.prevVolume = audio.volume;
+        audio.volume = 0;
+        slider.value = 0;
+      } else {
+        audio.volume = audio.dataset.prevVolume || 1;
+        slider.value = audio.volume * 100;
+      }
+      updateVolumeIcon(audio.volume * 100);
+    }
+    
+    function updateVolumeIcon(value) {
+      const btn = document.getElementById('volume-btn');
+      if (value == 0) btn.textContent = '🔇';
+      else if (value < 50) btn.textContent = '🔉';
+      else btn.textContent = '🔊';
+    }
+    
+    function playNext() {
+      if (!currentPlayingId) return;
+      const currentIndex = filteredTracks.findIndex(t => t._id === currentPlayingId);
+      if (currentIndex < filteredTracks.length - 1) {
+        togglePlay(filteredTracks[currentIndex + 1]._id);
+      }
+    }
+    
+    function playPrevious() {
+      if (!currentPlayingId) return;
+      const currentIndex = filteredTracks.findIndex(t => t._id === currentPlayingId);
+      if (currentIndex > 0) {
+        togglePlay(filteredTracks[currentIndex - 1]._id);
+      }
+    }
+    
+    // Audio event handlers
+    const audioPlayer = document.getElementById('audio-player');
+    
+    audioPlayer.addEventListener('timeupdate', () => {
+      const current = audioPlayer.currentTime;
+      const duration = audioPlayer.duration;
+      document.getElementById('current-time').textContent = formatTime(current);
+      document.getElementById('progress-fill').style.width = (current / duration * 100) + '%';
     });
+    
+    audioPlayer.addEventListener('loadedmetadata', () => {
+      document.getElementById('duration').textContent = formatTime(audioPlayer.duration);
+      document.getElementById('play-pause-btn').textContent = '⏸';
+    });
+    
+    audioPlayer.addEventListener('ended', () => {
+      playNext(); // Auto-play next track
+    });
+    
+    audioPlayer.addEventListener('play', () => {
+      document.getElementById('play-pause-btn').textContent = '⏸';
+    });
+    
+    audioPlayer.addEventListener('pause', () => {
+      document.getElementById('play-pause-btn').textContent = '▶';
+    });
+    
+    // Check for admin mode
+    if (new URLSearchParams(window.location.search).get('showAdmin') === 'true') {
+      document.getElementById('admin-section').style.display = 'block';
+    }
     
     // Load tracks on page load
     loadTracks();
@@ -681,9 +926,8 @@ const server = http.createServer(async (req, res) => {
           document.getElementById('stat-tracks').textContent = '0';
           document.getElementById('stat-albums').textContent = '0';
           document.getElementById('stat-artists').textContent = '0';
-          document.getElementById('stat-ads').textContent = '0';
           
-          status.textContent = '✓ Deleted ' + data.deleted.tracks + ' tracks, ' + data.deleted.albums + ' albums, ' + data.deleted.artists + ' artists, ' + data.deleted.ads + ' ads';
+          status.textContent = '✓ Deleted ' + data.deleted.tracks + ' tracks, ' + data.deleted.albums + ' albums, ' + data.deleted.artists + ' artists';
           status.className = 'status success';
           
           setTimeout(() => location.reload(), 1500);
@@ -718,7 +962,6 @@ const server = http.createServer(async (req, res) => {
           document.getElementById('stat-tracks').textContent = data.after.tracks;
           document.getElementById('stat-albums').textContent = data.after.albums;
           document.getElementById('stat-artists').textContent = data.after.artists;
-          document.getElementById('stat-ads').textContent = data.after.ads;
           
           status.textContent = '✓ Refresh complete! ' + data.newTracks + ' new tracks, ' + data.existingTracks + ' existing';
           status.className = 'status success';
@@ -813,6 +1056,86 @@ const server = http.createServer(async (req, res) => {
     // Poll for image status every 2 seconds
     setInterval(checkImageStatus, 2000);
     checkImageStatus();
+    
+    // ============ ARTISTS VIEW ============
+    async function loadArtists() {
+      try {
+        const res = await fetch('/artists');
+        allArtists = await res.json();
+        filteredArtists = allArtists;
+        renderArtists();
+      } catch (err) {
+        console.error('Failed to load artists:', err);
+      }
+    }
+    
+    function handleArtistSearch() {
+      const query = document.getElementById('artist-search').value.toLowerCase().trim();
+      if (!query) {
+        filteredArtists = allArtists;
+      } else {
+        filteredArtists = allArtists.filter(artist => 
+          artist.artistdisplay?.toLowerCase().includes(query) ||
+          artist.artistcat?.toLowerCase().includes(query)
+        );
+      }
+      renderArtists();
+    }
+    
+    function renderArtists() {
+      const grid = document.getElementById('artists-grid');
+      document.getElementById('artist-count').textContent = filteredArtists.length + ' artists';
+      
+      grid.innerHTML = filteredArtists.map(artist => 
+        '<div class="card" onclick="showArtistDetail(\\'' + artist._id + '\\')">' +
+        '<h3>' + (artist.artistdisplay || 'Unknown') + '</h3>' +
+        '<p>' + (artist.artistcat || 'No genre') + '</p>' +
+        '<div class="count">' + (artist.trackCount || 0) + ' tracks</div>' +
+        '</div>'
+      ).join('');
+    }
+    
+    function showArtistDetail(artistId) {
+      const artist = allArtists.find(a => a._id === artistId);
+      if (!artist) return;
+      
+      document.getElementById('artist-list').style.display = 'none';
+      document.getElementById('artist-detail').style.display = 'block';
+      document.getElementById('artist-detail-name').textContent = artist.artistdisplay;
+      document.getElementById('artist-detail-genre').textContent = artist.artistcat || 'No genre';
+      
+      // Filter tracks by this artist
+      const artistTracks = allTracks.filter(t => t.artist?._id === artistId);
+      renderArtistTracks(artistTracks);
+    }
+    
+    function renderArtistTracks(tracks) {
+      const tbody = document.getElementById('artist-tracks-body');
+      tbody.innerHTML = tracks.map(track => {
+        let imgSrc = '';
+        if (track.album?.localImage) {
+          const filename = track.album.localImage.replace(/^.*[\\\\\\/]/, '');
+          imgSrc = '/imgs/' + encodeURIComponent(filename);
+        }
+        const imgHtml = imgSrc ? '<img class="album-cover" src="' + imgSrc + '" alt="" onerror="this.style.display=\\'none\\'">' : '<div class="album-cover"></div>';
+        const isPlaying = currentPlayingId === track._id;
+        const playBtnClass = isPlaying ? 'play-btn playing' : 'play-btn';
+        const playIcon = isPlaying ? '⏹' : '▶';
+        
+        return '<tr>' +
+          '<td><button class="' + playBtnClass + '" onclick="event.stopPropagation(); togglePlay(\\'' + track._id + '\\')" data-play-id="' + track._id + '">' + playIcon + '</button></td>' +
+          '<td onclick="showTrackDetails(\\'' + track._id + '\\')">' + imgHtml + '</td>' +
+          '<td onclick="showTrackDetails(\\'' + track._id + '\\')">' + (track.title || '-') + '</td>' +
+          '<td onclick="showTrackDetails(\\'' + track._id + '\\')">' + (track.album?.title || '-') + '</td>' +
+          '<td onclick="showTrackDetails(\\'' + track._id + '\\')">' + (track.album?.year || '-') + '</td>' +
+          '</tr>';
+      }).join('');
+    }
+    
+    function showArtistList() {
+      document.getElementById('artist-list').style.display = 'block';
+      document.getElementById('artist-detail').style.display = 'none';
+    }
   </script>
 </body>
 </html>`;
@@ -1008,6 +1331,8 @@ async function start() {
       console.log(`  GET  /           - Web UI`);
       console.log(`  GET  /stats      - Database statistics`);
       console.log(`  GET  /tracks     - All tracks`);
+      console.log(`  GET  /artists    - All artists with track counts`);
+      console.log(`  GET  /genres     - All genres with counts`);
       console.log(`  GET  /tracks/recent?limit=10 - Recent tracks`);
       console.log(`  POST /refresh?url=<URL> - Refresh data from URL`);
       console.log(`  GET  /export     - Export database and images as zip`);

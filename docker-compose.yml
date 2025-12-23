@@ -1,8 +1,23 @@
 version: '3.8'
 
 services:
+  app:
+    build: .
+    container_name: accuradio-app
+    ports:
+      - "3000:3000"
+    environment:
+      - MONGODB_URI=mongodb://mongodb:27017/accuradio
+      - PARSE_URL=${PARSE_URL:-}
+    volumes:
+      - ./src/imgs:/app/src/imgs
+    depends_on:
+      mongodb:
+        condition: service_healthy
+    restart: unless-stopped
+
   mongodb:
-    image: mongo:7.0
+    image: mongo:4.4
     container_name: accuradio-mongo
     ports:
       - "27017:27017"
@@ -10,6 +25,12 @@ services:
       - mongo-data:/data/db
     environment:
       - MONGO_INITDB_DATABASE=accuradio
+    healthcheck:
+      test: echo 'db.runCommand("ping").ok' | mongo localhost:27017/accuradio --quiet
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
     restart: unless-stopped
 
 volumes:
