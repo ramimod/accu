@@ -51,7 +51,8 @@ $SCP_CMD -r src/* "${USER}@${SERVER}:${REMOTE_DIR}/src/"
 
 echo -e "${YELLOW}🐳 Building and starting containers...${NC}"
 $SSH_CMD "cd ${REMOTE_DIR} && docker compose down 2>/dev/null || true"
-$SSH_CMD "cd ${REMOTE_DIR} && docker compose build --no-cache"
+$SSH_CMD "cd ${REMOTE_DIR} && docker system prune -f 2>/dev/null || true"
+$SSH_CMD "cd ${REMOTE_DIR} && docker compose build --no-cache --pull"
 $SSH_CMD "cd ${REMOTE_DIR} && docker compose up -d"
 
 echo -e "${YELLOW}📋 Checking container status...${NC}"
